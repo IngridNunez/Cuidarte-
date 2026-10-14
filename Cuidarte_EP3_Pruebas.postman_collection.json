@@ -1,0 +1,212 @@
+{
+  "info": {
+    "name": "Cuidarte+ - EP3 Casos de prueba",
+    "description": "Casos de prueba ejecutados: CP-01, CP-02, CP-04, CP-05 y CP-07. Orden: 00 Preparación (crea el usuario de prueba) -> CP-01 (guarda el token y el ID del paciente automaticamente) -> resto de los casos. Requiere el sistema levantado con docker compose (backend en el puerto 4444).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "token", "value": "" },
+    { "key": "pacientePropio", "value": "23" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "00 Preparación - registrar usuario de prueba",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// 201 = usuario creado; 400 = ya existía en esta base de datos. Ambos sirven para continuar.",
+              "pm.test('Usuario de prueba disponible (201 o 400)', () => pm.expect(pm.response.code).to.be.oneOf([201, 400]));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre_usuario\": \"qa_paciente\",\n  \"password\": \"QaTest2026!\",\n  \"correo\": \"qa.paciente@test.cl\",\n  \"rut\": \"9.876.543-3\"\n}"
+        },
+        "url": "http://localhost:4444/autenticacion/registro"
+      }
+    },
+    {
+      "name": "CP-01 Autenticación exitosa",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Retorna HTTP 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Retorna un token JWT', () => pm.expect(body.token).to.be.a('string').and.not.empty);",
+              "if (body.token) {",
+              "  pm.collectionVariables.set('token', body.token);",
+              "  const payload = JSON.parse(atob(body.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));",
+              "  pm.test('El token tiene vigencia limitada (2 h)', () => pm.expect(payload.exp - payload.iat).to.eql(7200));",
+              "  if (payload.pacienteId) pm.collectionVariables.set('pacientePropio', String(payload.pacienteId));",
+              "  console.log('Payload del JWT:', payload);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre_usuario\": \"qa_paciente\",\n  \"password\": \"QaTest2026!\"\n}"
+        },
+        "url": "http://localhost:4444/autenticacion/login"
+      }
+    },
+    {
+      "name": "CP-02 Login con contraseña incorrecta",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Retorna HTTP 401', () => pm.response.to.have.status(401));",
+              "pm.test('Mensaje genérico \"Credenciales inválidas\"', () => pm.expect(pm.response.json().error).to.eql('Credenciales inválidas'));",
+              "pm.test('No retorna token', () => pm.expect(pm.response.json().token).to.be.undefined);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre_usuario\": \"qa_paciente\",\n  \"password\": \"HolaMirame!1234\"\n}"
+        },
+        "url": "http://localhost:4444/autenticacion/login"
+      }
+    },
+    {
+      "name": "CP-04 Inyección SQL en login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Retorna HTTP 401', () => pm.response.to.have.status(401));",
+              "pm.test('No retorna token', () => pm.expect(pm.response.json().token).to.be.undefined);",
+              "pm.test('No expone errores de base de datos', () => pm.expect(pm.response.text().toLowerCase()).to.not.match(/sql|syntax|postgres|query/));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre_usuario\": \"' OR '1'='1' --\",\n  \"password\": \"contraseña123\"\n}"
+        },
+        "url": "http://localhost:4444/autenticacion/login"
+      }
+    },
+    {
+      "name": "CP-05 Control de acceso",
+      "item": [
+        {
+          "name": "CP-05a Datos de otro paciente (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Retorna HTTP 403', () => pm.response.to.have.status(403));",
+                  "pm.test('No expone datos del otro paciente', () => pm.expect(pm.response.json().rut).to.be.undefined);"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "http://localhost:4444/pacientes/1" }
+        },
+        {
+          "name": "CP-05b Exámenes de otro paciente (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Retorna HTTP 403', () => pm.response.to.have.status(403));"]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "http://localhost:4444/examenes/paciente/1" }
+        },
+        {
+          "name": "CP-05c Datos propios - control (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Retorna HTTP 200', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "http://localhost:4444/pacientes/{{pacientePropio}}" }
+        },
+        {
+          "name": "CP-05d Sin token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('Retorna HTTP 401', () => pm.response.to.have.status(401));"]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "http://localhost:4444/pacientes/1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "CP-07 Rendimiento",
+      "item": [
+        {
+          "name": "CP-07 GET paciente (carga 80 usuarios)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Retorna HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Responde en menos de 250 ms', () => pm.expect(pm.response.responseTime).to.be.below(250));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "http://localhost:4444/pacientes/{{pacientePropio}}" }
+        }
+      ]
+    }
+  ]
+}
